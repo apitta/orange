@@ -3,16 +3,17 @@
 #include <Ethernet.h>
 #include <EthernetUdp.h>
 #include <PubSubClient.h>
+#include <OneWire.h>
 
 //Ethernet
-byte mac[] = {0xAA,0xAB,0xAC,0xAD,0xAE,0xAF};
+byte mac[] = {0xAA,0xAB,0xAC,0xAD,0xAE,0xAF}; //90a2da0d0bee
 byte server[] = {127,0,0,1}; 
 EthernetClient eth;
 PubSubClient mqtt(server, 1883, callback, eth);
 
 //udp
 EthernetUDP udp;
-IPAddress timeServer(176,9,253,75); //pool.ntp.org
+IPAddress timeServer(200,160,7,193); //pool.ntp.org
 
 //control
 boolean mqtt_connect = false;
@@ -20,10 +21,13 @@ int eth_maintain;
 unsigned long keepalivetime=0;
 char timebuff[24];
 
+//sensors onewire
+OneWire ds(9); // on pin D8
+
 //analog
 int moistureA = 0; //green
 int lightA = 1; //orange
-int temperatureA = 2; //yellow
+//int temperatureA = 2; //yellow
 
 // digital
 int plug1 = 5;
@@ -197,19 +201,19 @@ void sol() {
     togglePlug(1);
   }
   // inicia dia
-  if(hour() >= 18 && statusPlug1 == DESLIGADO){
+  if(hour() >= 0 && statusPlug1 == DESLIGADO){
     togglePlug(1);
   }
   // cicla plug2
-  if(hour() == 18 && minute() == 15 && second() < 16 && statusPlug2 == DESLIGADO){
+  if(hour() == 2 && minute() == 15 && second() < 61 && statusPlug2 == DESLIGADO){
     togglePlug(2);
-    delay(15000);
+    delay(60000);
     togglePlug(2);
   }
   // inicia plug2
-  if(hour() == 00 && minute() == 15 && second() < 16 && statusPlug2 == DESLIGADO){
+  if(hour() == 8 && minute() == 15 && second() < 61 && statusPlug2 == DESLIGADO){
     togglePlug(2);
-    delay(15000);
+    delay(60000);
     togglePlug(2);
   }
 }
@@ -218,11 +222,49 @@ void sol() {
  * Temperatura usando sensor LM35 
  *
  */
-int temperature2(){
-  int temp;
-  temp = analogRead(temperatureA);
-  temp = temp * 0.48828125;
-  return temp;
+float temperature2(){
+//float getTemp_DS18S20(){
+  byte data[12];
+  byte addr[8];
+  if ( !ds.search(addr)) {
+    //no more sensors on chain, reset search
+    ds.reset_search();
+    return -1000;
+   }
+
+ if ( OneWire::crc8( addr, 7) != addr[7]) {
+   //Serial.println("DS18S20 CRC is not valid!");
+   return -1000;
+ }
+
+ if ( addr[0] != 0x10 && addr[0] != 0x28) {
+   //Serial.print("DS18S20 Device is not recognized");
+   return -1000;
+ }
+
+ ds.reset();
+ ds.select(addr);
+ ds.write(0x44,1); // start conversion, with parasite power on at the end
+
+ byte present = ds.reset();
+ ds.select(addr);  
+ ds.write(0xBE); // Read Scratchpad
+
+ 
+ for (int i = 0; i < 9; i++) { // we need 9 bytes
+  data[i] = ds.read();
+ }
+ 
+ ds.reset_search();
+ 
+ byte MSB = data[1];
+ byte LSB = data[0];
+
+ float tempRead = ((MSB << 8) | LSB); //using two's compliment
+ float TemperatureSum = tempRead / 16;
+// //Serial.print("DS18S20: ");
+// //Serial.println(TemperatureSum);
+ return TemperatureSum;
 }
 //
 //float temperature() {
