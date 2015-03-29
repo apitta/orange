@@ -6,7 +6,7 @@
 #include <OneWire.h>
 
 //Ethernet
-byte mac[] = {0xAA,0xAB,0xAC,0xAD,0xAE,0xAF}; //90a2da0d0bee
+byte mac[] = {0xAA,0xA1,0xA2,0xA3,0xA4,0xA5};
 byte server[] = {127,0,0,1}; 
 EthernetClient eth;
 PubSubClient mqtt(server, 1883, callback, eth);
@@ -21,19 +21,19 @@ int eth_maintain;
 unsigned long keepalivetime=0;
 char timebuff[24];
 
-//sensors onewire
-OneWire ds(9); // on pin D8
-
 //analog
 int moistureA = 0; //green
 int lightA = 1; //orange
 //int temperatureA = 2; //yellow
 
 // digital
-int plug1 = 5;
-int plug2 = 6;
-int plug3 = 7;
-int plug4 = 8;
+int plug1 = 5; //on pin D5 (relay plug 1)
+int plug2 = 6; //on pin D6 (relay plug 2)
+int plug3 = 7; //on pin D7 (relay plug 3)
+int plug4 = 8; //on pin D8 (relay plug 4)
+
+//sensors onewire
+OneWire ds(9); // on pin D9
 
 // status das tomadas (ligado/desligado)
 #define ZERO 48
@@ -197,11 +197,11 @@ void sensores() {
  */
 void sol() { 
   // inicia noite
-  if(hour() >= 12 && statusPlug1 == LIGADO){
+  if(hour() >= 0 && statusPlug1 == DESLIGADO){
     togglePlug(1);
   }
   // inicia dia
-  if(hour() >= 0 && statusPlug1 == DESLIGADO){
+  if(hour() >= 12 && statusPlug1 == LIGADO){
     togglePlug(1);
   }
   // cicla plug2
