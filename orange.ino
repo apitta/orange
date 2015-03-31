@@ -6,8 +6,8 @@
 #include <OneWire.h>
 
 //Ethernet
-byte mac[] = {0xAA,0xA1,0xA2,0xA3,0xA4,0xA5};
-byte server[] = {127,0,0,1}; 
+byte mac[] = { 0xAA, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5 };
+byte server[] = { 127,0,0,1 }; 
 EthernetClient eth;
 PubSubClient mqtt(server, 1883, callback, eth);
 
@@ -177,9 +177,9 @@ void sensores() {
   float c = 0;
   char buf[8];
 
-  a = analogRead(moistureA);  
+  a = moisture();
   b = light();
-  c = temperature2();  
+  c = temperature();
  
   index++;
   serie1[index] = a;
@@ -187,8 +187,8 @@ void sensores() {
   serie3[index] = c;
   
   if(index == INTERVALO) {
-    publicar();      
-    index = 0; 
+    publicar();
+    index = 0;
   }
 }
 
@@ -197,21 +197,21 @@ void sensores() {
  */
 void sol() { 
   // inicia noite
-  if(hour() >= 0 && statusPlug1 == DESLIGADO){
+  if(hour() >= 9 && statusPlug1 == LIGADO){
     togglePlug(1);
   }
   // inicia dia
-  if(hour() >= 12 && statusPlug1 == LIGADO){
+  if(hour() >= 21 && statusPlug1 == DESLIGADO){
     togglePlug(1);
   }
   // cicla plug2
-  if(hour() == 2 && minute() == 15 && second() < 61 && statusPlug2 == DESLIGADO){
+  if(hour() == 23 && minute() == 15 && statusPlug2 == DESLIGADO){
     togglePlug(2);
     delay(60000);
     togglePlug(2);
   }
   // inicia plug2
-  if(hour() == 8 && minute() == 15 && second() < 61 && statusPlug2 == DESLIGADO){
+  if(hour() == 5 && minute() == 15 && statusPlug2 == DESLIGADO){
     togglePlug(2);
     delay(60000);
     togglePlug(2);
@@ -222,7 +222,7 @@ void sol() {
  * Temperatura usando sensor LM35 
  *
  */
-float temperature2(){
+float temperature(){
 //float getTemp_DS18S20(){
   byte data[12];
   byte addr[8];
@@ -266,21 +266,6 @@ float temperature2(){
 // //Serial.println(TemperatureSum);
  return TemperatureSum;
 }
-//
-//float temperature() {
-//  int i = 0;
-//  int val = 0;
-//  float temp = 0;
-//  float total = 0;
-//  for(i = 0; i < 5; i++) {
-//   val = analogRead(temperatureA);
-//   temp = (val * 0.00488);
-//   temp = temp * 100;
-//   total += temp;
-//  }  
-//  temp = total / 5;
-//  return temp;
-//}
 
 /*
  * Luminosidade por fotoresistor
@@ -291,6 +276,14 @@ int light() {
    l = map(l, 0, 900, 0, 255);
    l = constrain(l, 0, 255);
    return 255-l;
+}
+
+int moisture(){
+  int m = 0;
+  m = analogRead(moistureA);
+  m = map(m,0,1024,0,100);
+  m = constrain(m,0,100);
+  return 100-m;
 }
 
 /*
