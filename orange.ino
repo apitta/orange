@@ -6,14 +6,14 @@
 #include <OneWire.h>
 
 //Ethernet
-byte mac[] = { 0xAA, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5 };
+byte mac[] = { 0x00, 0xFF, 0x00, 0xFF, 0xEE, 0xDD };
 byte server[] = { 127,0,0,1 }; 
 EthernetClient eth;
 PubSubClient mqtt(server, 1883, callback, eth);
 
 //udp
 EthernetUDP udp;
-IPAddress timeServer(200,160,7,193); //pool.ntp.org
+IPAddress timeServer(200,160,7,193); //br.pool.ntp.org
 
 //control
 boolean mqtt_connect = false;
@@ -107,17 +107,17 @@ void setup()
 
   //digital control
   Serial.println("[STARTUP] Iniciando as tomadas.");  
-  digitalWrite(plug1, HIGH);  
-  mqtt.publish("orange/plugs/1", "1");  
-  digitalWrite(plug2, LOW);  
+  digitalWrite(plug1, LOW);
+  mqtt.publish("orange/plugs/1", "0");
+  digitalWrite(plug2, LOW);
   mqtt.publish("orange/plugs/2", "0");
   digitalWrite(plug3, HIGH); 
   mqtt.publish("orange/plugs/3", "1");
-  digitalWrite(plug4, LOW);  
-  mqtt.publish("orange/plugs/4", "0");   
+  digitalWrite(plug4, LOW);
+  mqtt.publish("orange/plugs/4", "0");
   Serial.println("[STARTUP] Inscricao no canal orange/plugs/#");
   mqtt.subscribe("orange/plugs/#");
-  
+
   // control stuff
   keepalivetime=millis();
 }// end of setup
@@ -131,7 +131,7 @@ void loop(){
     while(!Ethernet.begin(mac))
       Serial.println("[RUNNING] Error getting IP address via DHCP, trying again...");
   }
-  
+
   //ntp time refresh check
   while(timeStatus() == timeNeedsSync){
     Serial.println("[RUNNING] Refreshing ntp time.");
@@ -207,13 +207,13 @@ void sol() {
   // cicla plug2
   if(hour() == 23 && minute() == 15 && statusPlug2 == DESLIGADO){
     togglePlug(2);
-    delay(60000);
+    delay(30000);
     togglePlug(2);
   }
   // inicia plug2
   if(hour() == 5 && minute() == 15 && statusPlug2 == DESLIGADO){
     togglePlug(2);
-    delay(60000);
+    delay(30000);
     togglePlug(2);
   }
 }
@@ -281,8 +281,9 @@ int light() {
 int moisture(){
   int m = 0;
   m = analogRead(moistureA);
-  m = map(m,0,1024,0,100);
-  m = constrain(m,0,100);
+  //m = map(m,0,1024,0,100);
+  //m = constrain(m,0,100);
+  //return 1024-m;
   return 100-m;
 }
 
@@ -325,6 +326,7 @@ void publicar() {
  * Funcao para alternar o estado do plug entre ligado e desligado
  */
 void togglePlug(int plug) {
+//  Serial.print(plug); Serial.print(" ");
   switch(plug) {
     case 1:
       if(statusPlug1 == LIGADO) {
@@ -334,6 +336,7 @@ void togglePlug(int plug) {
        digitalWrite(plug1, HIGH);
        statusPlug1 = LIGADO;
       } 
+//      Serial.println(statusPlug1);
       break;
    case 2:
       if(statusPlug2 == LIGADO) {
@@ -343,6 +346,7 @@ void togglePlug(int plug) {
        digitalWrite(plug2, HIGH);
        statusPlug2 = LIGADO;
       } 
+//      Serial.println(statusPlug2);
       break;
    case 3:
       if(statusPlug3 == LIGADO) {
@@ -352,6 +356,7 @@ void togglePlug(int plug) {
        digitalWrite(plug3, HIGH);
        statusPlug3 = LIGADO;
       } 
+//      Serial.println(statusPlug3);
       break;
    case 4:
       if(statusPlug4 == LIGADO) {
@@ -361,6 +366,7 @@ void togglePlug(int plug) {
        digitalWrite(plug4, HIGH);
        statusPlug1 = LIGADO;
       } 
+//      Serial.println(statusPlug4);
       break;
   }
 }
@@ -386,38 +392,43 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.println(topic);
   Serial.print("Status: ");
   Serial.println(buffer[0]);
- 
+
   if(strcmp(topic, "orange/plugs/1") == 0) {
-    Serial.println("Plug 1.");
+    Serial.print("Plug 1:");
     if(buffer[0] == UM) {
-        Serial.println("Ligar.");
+        Serial.println(" Ligar.");
         digitalWrite(plug1, HIGH);
     } else {
+      Serial.println(" Desligar.");
         digitalWrite(plug1, LOW);
-    }     
+    }
   } else if(strcmp(topic,"orange/plugs/2") == 0) {
-    Serial.println("Plug 2.");
+    Serial.print("Plug 2: ");
     if(buffer[0] == UM) {
-        Serial.println("Ligar.");
-        digitalWrite(plug2, HIGH);
+      Serial.println(" Ligar.");
+      digitalWrite(plug2, HIGH);
     } else {
-        digitalWrite(plug2, LOW);
-    }    
+      Serial.println(" Desligar.");
+      digitalWrite(plug2, LOW);
+    }
   } else if(strcmp(topic,"orange/plugs/3") == 0) {
-    Serial.println("Plug 3.");
+    Serial.print("Plug 3: ");
     if(buffer[0] == UM) {
-      Serial.println("Ligar.");
+      Serial.println(" Ligar.");
       digitalWrite(plug3, HIGH);
     } else {
-        digitalWrite(plug3, LOW);
-    }    
-  } else if(strcmp(topic,"orange/plugs/4") == 0) {
-    Serial.println("Plug 4.");
+      Serial.println(" Desligar.");
+      digitalWrite(plug3, LOW);
+    }
+  } else if(strcmp(topic,"orange/plugs/4") == 0){
+    Serial.print("Plug 4: ");
     if(buffer[0] == UM) {
+      Serial.println(" Ligar.");
         digitalWrite(plug4, HIGH);
     } else {
+      Serial.println(" Desligar.");
         digitalWrite(plug4, LOW);
-    }  
+    }
   } else {
     Serial.println("Denied.");
   }  
