@@ -3,122 +3,183 @@
 #include <Ethernet.h>
 #include <EthernetUdp.h>
 #include <PubSubClient.h>
+#include <OneWire.h>
 
-#define LIGADO 1
-#define DESLIGADO 0
+//Ethernet
+byte mac[] = { 0x00, 0xFF, 0x00, 0xFF, 0xEE, 0xDD };
+byte server[] = { 127,0,0,1 }; 
+EthernetClient eth;
+PubSubClient mqtt(server, 1883, callback, eth);
 
-// asc code de 0 e 1
-#define ZERO 48
-#define UM 49
+//udp
+EthernetUDP udp;
+IPAddress timeServer(200,160,7,193); //br.pool.ntp.org
 
-#define INTERVALO 60
+//control
+boolean mqtt_connect = false;
+int eth_maintain;
+unsigned long keepalivetime=0;
+char timebuff[24];
 
-// mac da interface de rede da ethershield
-byte mac[] = { 0x90, 0xA2, 0xDA, 0x, 0x, 0x };
-// byte ip[] = { 192, 168, 1, 5}; // quando indefinido usa a funcao dhcp
-
-// ip e porta do servidor rodando o mqtt server (mosquitto)
-byte server[] = { 127, 0, 0, 1 };
-int port = 1883;
-
-EthernetClient eth; 
-PubSubClient mqtt(server, port, callback, eth);
-
-EthernetUDP Udp;
-IPAddress timeServer(200,192,232,8);
-unsigned int localPort = 8888;
-const int timeZone = -3;
-time_t prevDisplay = 0; // when the digital clock was displayed
-
-// analog
-int moistureA = 0;
-int lightA = 1;
-int temperatureA = 2;
+//analog
+int moistureA = 0; //green
+int lightA = 1; //orange
+//int temperatureA = 2; //yellow
 
 // digital
-int plug1 = 4;
-int plug2 = 5;
-int plug3 = 6;
-int plug4 = 7;
+int plug1 = 5; //on pin D5 (relay plug 1)
+int plug2 = 6; //on pin D6 (relay plug 2)
+int plug3 = 7; //on pin D7 (relay plug 3)
+int plug4 = 8; //on pin D8 (relay plug 4)
+
+//sensors onewire
+OneWire ds(9); // on pin D9
 
 // status das tomadas (ligado/desligado)
-int statusPlug1 = DESLIGADO;
+#define ZERO 48
+#define UM 49
+#define LIGADO 1
+#define DESLIGADO 0
+#define INTERVALO 60
+int statusPlug1 = LIGADO;
 int statusPlug2 = DESLIGADO;
-int statusPlug3 = DESLIGADO;
+int statusPlug3 = LIGADO;
 int statusPlug4 = DESLIGADO;
 
+//serie de valores dos sensores
 int index = 0;
 int serie1[INTERVALO];
 int serie2[INTERVALO];
-float serie3[INTERVALO];
+int serie3[INTERVALO];
 
-int valor = 0;
+/*****************************/
 
-/*
- * Inicializacao do circuito
- *
- */
-void setup() {       
-  Serial.begin(9600);  
-  
-  Serial.println("Iniciando sistema.");
+void setup()
+{
+  delay(10);Serial.begin (9600);delay(10);
+  Serial.print("[STARTUP] ");
+  Serial.print(__FILE__);
+  Serial.print(" @ ");
+  Serial.print(__DATE__);
+  Serial.print(" ");
+  Serial.println(__TIME__);
+  // disable SD SPI bus
+  pinMode(4,OUTPUT);
+  digitalWrite(4,HIGH);
+  // enable ethernet SPI bus
+  pinMode(10,OUTPUT);
+  digitalWrite(10,LOW); // Ethernet ONLY from now on
+  Serial.println("[STARTUP] inciando plugs");
   pinMode(plug1, OUTPUT);
   pinMode(plug2, OUTPUT);
-  pinMode(plug3, OUTPUT);     
-  pinMode(plug4, OUTPUT);  
-
-  Serial.println("Iniciando a rede."); 
-  Ethernet.begin(mac);
-  Serial.print("IP definido pelo DHCP ");
+  pinMode(plug3, OUTPUT);
+  pinMode(plug4, OUTPUT);
+  // ethernet 
+  while(!Ethernet.begin(mac)){ //wait for IP address
+    eth_maintain = Ethernet.maintain();
+    if(eth_maintain % 2 == 0){//eth ok!
+      Serial.print("[STARTUP] Ethernet IP: ");
+      Serial.println(Ethernet.localIP());
+    }else{
+      Serial.println("[STARTUP] Error getting IP address via DHCP, trying again...");
+    }
+  }
+  Serial.print("[STARTUP] Ethernet IP: ");
   Serial.println(Ethernet.localIP());
 
-  Udp.begin(localPort);
-  Serial.println("Sincronizando com o servidor ntp.");
-  setSyncProvider(getNtpTime);  
-  delay(3000);
+  // ntp udp stuff
+  while (udp.begin(123) != 1){
+    Serial.println("[STARTUP] Error getting udp started... trying again...");
+  }
+  Serial.println("[STARTUP] NTP sync request started.");
+  setSyncProvider(getNtpTime);
+  setSyncInterval(86400); //one day
+  // mqtt stuff
+  mqtt_connect = mqtt.connect("OrangeClient");
+  while(!mqtt_connect){
+    Serial.println("[STARTUP] Error getting mqtt started... trying again...");
+    mqtt_connect = mqtt.connect("OrangeClient");
+    if(mqtt.connected()){
+      Serial.println("[STARTUP] mqtt connected.");
+      mqtt.publish("log/startup/info","MQTT connected! Channel log created.");
+    }
+  }
 
-  Serial.println("Iniciando mqtt.");
-  if(!mqtt.connected()) {
-     mqtt.connect("OrangeClient");
-  }  
-
-  Serial.println("Iniciando as tomadas.");
-  
-  digitalWrite(plug1, HIGH);  
-  mqtt.publish("orange/plugs/1", "1");  
-  digitalWrite(plug2, LOW);  
+  //digital control
+  Serial.println("[STARTUP] Iniciando as tomadas.");  
+  digitalWrite(plug1, LOW);
+  mqtt.publish("orange/plugs/1", "0");
+  digitalWrite(plug2, LOW);
   mqtt.publish("orange/plugs/2", "0");
   digitalWrite(plug3, HIGH); 
   mqtt.publish("orange/plugs/3", "1");
-  digitalWrite(plug4, LOW);  
-  mqtt.publish("orange/plugs/4", "0"); 
-  
-  Serial.println("Inscricao no canal orange/plugs/#");
-  mqtt.subscribe("orange/plugs/#"); 
-  
-}
+  digitalWrite(plug4, LOW);
+  mqtt.publish("orange/plugs/4", "0");
+  Serial.println("[STARTUP] Inscricao no canal orange/plugs/#");
+  mqtt.subscribe("orange/plugs/#");
 
-void loop() {
-  sensores();
-  sol();
-  delay(1000);
-  mqtt.loop();
-}
+  // control stuff
+  keepalivetime=millis();
+}// end of setup
 
-/*
- * leitura dos sensores do circuito
- *
- */
+/************************/
+
+void loop(){
+  //ethernet status check
+  eth_maintain = Ethernet.maintain();
+  if(eth_maintain % 2 == 1){//eth not ok
+    while(!Ethernet.begin(mac))
+      Serial.println("[RUNNING] Error getting IP address via DHCP, trying again...");
+  }
+
+  //ntp time refresh check
+  while(timeStatus() == timeNeedsSync){
+    Serial.println("[RUNNING] Refreshing ntp time.");
+    getNtpTime();
+    if(timeStatus() == timeSet){
+      Serial.println("[RUNNING] time ok");
+    }
+  }
+  //mqtt check
+  while(!mqtt_connect){
+    Serial.println("[RUNNING] mqtt disconnected... reconnecting...");
+    mqtt_connect = mqtt.connect("OrangeClient");
+    delay(300);
+    if(mqtt.connected()){
+      Serial.println("[RUNNING] mqtt connected. resuming normal logging.");
+    }
+  }
+  //mqtt.loop();
+  if ((millis() - keepalivetime)>1000){
+    sensores();
+    sol();
+    Ethernet.maintain();
+    if (!mqtt.loop()) {
+      Serial.print("[RUNNING] Client disconnected... ");
+      mqtt.disconnect();
+      if (mqtt.connect("OrangeClient")) {
+        Serial.println("reconnected.");
+      } else {
+        Serial.println("failed.");
+      }
+    }
+    keepalivetime = millis();
+    //mqtt.publish("log/running/localtime",timestamp());
+    //Serial.print(timestamp());
+    //Serial.println("[RUNNING] ping");
+  }
+}// end of loop
+
+/******************/
 void sensores() {
-  
   int a = 0;
   int b = 0; 
   float c = 0;
   char buf[8];
 
-  a = analogRead(moistureA);  
+  a = moisture();
   b = light();
-  c = temperature();  
+  c = temperature();
  
   index++;
   serie1[index] = a;
@@ -126,39 +187,33 @@ void sensores() {
   serie3[index] = c;
   
   if(index == INTERVALO) {
-    publicar();      
-    index = 0; 
+    publicar();
+    index = 0;
   }
- 
-  Serial.println("");
-  
 }
 
-
 /*
- *
  * funcao dia e noite usano como referencia a hora do cliente ntp
- *
  */
 void sol() { 
   // inicia noite
-  if(hour() >= 12 && statusPlug3 == LIGADO){
+  if(hour() >= 9 && statusPlug1 == LIGADO){
     togglePlug(1);
   }
   // inicia dia
-  if(hour() >= 18 && statusPlug3 == DESLIGADO){
+  if(hour() >= 21 && statusPlug1 == DESLIGADO){
     togglePlug(1);
   }
   // cicla plug2
-  if(hour() == 18 && minute() == 15 && statusPlug2 == DESLIGADO){
+  if(hour() == 23 && minute() == 15 && statusPlug2 == DESLIGADO){
     togglePlug(2);
-    delay(15000);
+    delay(30000);
     togglePlug(2);
   }
   // inicia plug2
-  if(hour() == 00 && minute() == 15 && statusPlug2 == DESLIGADO){
+  if(hour() == 5 && minute() == 15 && statusPlug2 == DESLIGADO){
     togglePlug(2);
-    delay(15000);
+    delay(30000);
     togglePlug(2);
   }
 }
@@ -166,26 +221,54 @@ void sol() {
 /*
  * Temperatura usando sensor LM35 
  *
- */ 
-float temperature() {
-  int i = 0;
-  int val = 0;
-  float temp = 0;
-  float total = 0;
-  for(i = 0; i < 5; i++) {
-   val = analogRead(temperatureA);
-   temp = (val * 0.00488);
-   temp = temp * 100;    
-   total += temp;
-  }  
-  temp = total / 5;
-  return temp;
+ */
+float temperature(){
+//float getTemp_DS18S20(){
+  byte data[12];
+  byte addr[8];
+  if ( !ds.search(addr)) {
+    //no more sensors on chain, reset search
+    ds.reset_search();
+    return -1000;
+   }
+
+ if ( OneWire::crc8( addr, 7) != addr[7]) {
+   //Serial.println("DS18S20 CRC is not valid!");
+   return -1000;
+ }
+
+ if ( addr[0] != 0x10 && addr[0] != 0x28) {
+   //Serial.print("DS18S20 Device is not recognized");
+   return -1000;
+ }
+
+ ds.reset();
+ ds.select(addr);
+ ds.write(0x44,1); // start conversion, with parasite power on at the end
+
+ byte present = ds.reset();
+ ds.select(addr);  
+ ds.write(0xBE); // Read Scratchpad
+
+ 
+ for (int i = 0; i < 9; i++) { // we need 9 bytes
+  data[i] = ds.read();
+ }
+ 
+ ds.reset_search();
+ 
+ byte MSB = data[1];
+ byte LSB = data[0];
+
+ float tempRead = ((MSB << 8) | LSB); //using two's compliment
+ float TemperatureSum = tempRead / 16;
+// //Serial.print("DS18S20: ");
+// //Serial.println(TemperatureSum);
+ return TemperatureSum;
 }
 
 /*
- *
  * Luminosidade por fotoresistor
- *
  */
 int light() { 
    int l = 0;
@@ -195,16 +278,24 @@ int light() {
    return 255-l;
 }
 
+int moisture(){
+  int m = 0;
+  m = analogRead(moistureA);
+  //m = map(m,0,1024,0,100);
+  //m = constrain(m,0,100);
+  //return 1024-m;
+  return 100-m;
+}
+
 /*
- *
- * calculo e publicacao das leituras dos sensores de luminosidade, humidade e temperatura 
- *
+ * calculo e publicacao das leituras dos sensores 
+ * de luminosidade, humidade e temperatura 
  */
 void publicar() {
     int j = 0;
     int totalSerie1, totalSerie2 = 0;
     float totalSerie3 = 0;
-    char buffer[8];
+    char outbuffer[8];
     
     for(j = 1; j <= INTERVALO; j++) {
       totalSerie1 = totalSerie1 + serie1[j];
@@ -214,32 +305,28 @@ void publicar() {
     totalSerie1 = (int) (totalSerie1 / INTERVALO);
     totalSerie2 = (int) (totalSerie2 / INTERVALO);
     totalSerie3 = totalSerie3 / INTERVALO;
-
+    Serial.print(timestamp());
     Serial.print(" Humidade ");
-    sprintf(buffer, "%d", totalSerie1);
-    mqtt.publish("orange/sensor/moisture", buffer);
-    Serial.print(buffer);
+    sprintf(outbuffer, "%d", totalSerie1);
+    mqtt.publish("orange/sensor/moisture", outbuffer);
+    Serial.print(outbuffer);
   
     Serial.print(" Luminosidade ");
-    sprintf(buffer, "%d", totalSerie2);
-    mqtt.publish("orange/sensor/luminosity", buffer);
-    Serial.print(buffer);  
+    sprintf(outbuffer, "%d", totalSerie2);
+    mqtt.publish("orange/sensor/luminosity", outbuffer);
+    Serial.print(outbuffer);  
     
     Serial.print(" Temperatura "); 
-    sprintf(buffer, "%d", (int) totalSerie3);
-    mqtt.publish("orange/sensor/temperature" , buffer);
-    Serial.print(buffer);    
-
+    sprintf(outbuffer, "%d", (int) totalSerie3);
+    mqtt.publish("orange/sensor/temperature" , outbuffer);
+    Serial.println(outbuffer);    
 }
 
-
-
 /*
- *
  * Funcao para alternar o estado do plug entre ligado e desligado
- *
  */
 void togglePlug(int plug) {
+//  Serial.print(plug); Serial.print(" ");
   switch(plug) {
     case 1:
       if(statusPlug1 == LIGADO) {
@@ -249,6 +336,7 @@ void togglePlug(int plug) {
        digitalWrite(plug1, HIGH);
        statusPlug1 = LIGADO;
       } 
+//      Serial.println(statusPlug1);
       break;
    case 2:
       if(statusPlug2 == LIGADO) {
@@ -258,6 +346,7 @@ void togglePlug(int plug) {
        digitalWrite(plug2, HIGH);
        statusPlug2 = LIGADO;
       } 
+//      Serial.println(statusPlug2);
       break;
    case 3:
       if(statusPlug3 == LIGADO) {
@@ -267,6 +356,7 @@ void togglePlug(int plug) {
        digitalWrite(plug3, HIGH);
        statusPlug3 = LIGADO;
       } 
+//      Serial.println(statusPlug3);
       break;
    case 4:
       if(statusPlug4 == LIGADO) {
@@ -276,15 +366,13 @@ void togglePlug(int plug) {
        digitalWrite(plug4, HIGH);
        statusPlug1 = LIGADO;
       } 
+//      Serial.println(statusPlug4);
       break;
   }
 }
 
 /*
- *
  * funcao de callback do cliente mqtt (pubsubclient)
- *
- *
  */
 void callback(char* topic, byte* payload, unsigned int length) {
   
@@ -304,38 +392,43 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.println(topic);
   Serial.print("Status: ");
   Serial.println(buffer[0]);
- 
+
   if(strcmp(topic, "orange/plugs/1") == 0) {
-    Serial.println("Plug 1.");
+    Serial.print("Plug 1:");
     if(buffer[0] == UM) {
-        Serial.println("Ligar.");
+        Serial.println(" Ligar.");
         digitalWrite(plug1, HIGH);
     } else {
+      Serial.println(" Desligar.");
         digitalWrite(plug1, LOW);
-    }     
+    }
   } else if(strcmp(topic,"orange/plugs/2") == 0) {
-    Serial.println("Plug 2.");
+    Serial.print("Plug 2: ");
     if(buffer[0] == UM) {
-        Serial.println("Ligar.");
-        digitalWrite(plug2, HIGH);
+      Serial.println(" Ligar.");
+      digitalWrite(plug2, HIGH);
     } else {
-        digitalWrite(plug2, LOW);
-    }    
+      Serial.println(" Desligar.");
+      digitalWrite(plug2, LOW);
+    }
   } else if(strcmp(topic,"orange/plugs/3") == 0) {
-    Serial.println("Plug 3.");
+    Serial.print("Plug 3: ");
     if(buffer[0] == UM) {
-      Serial.println("Ligar.");
+      Serial.println(" Ligar.");
       digitalWrite(plug3, HIGH);
     } else {
-        digitalWrite(plug3, LOW);
-    }    
-  } else if(strcmp(topic,"orange/plugs/4") == 0) {
-    Serial.println("Plug 4.");
+      Serial.println(" Desligar.");
+      digitalWrite(plug3, LOW);
+    }
+  } else if(strcmp(topic,"orange/plugs/4") == 0){
+    Serial.print("Plug 4: ");
     if(buffer[0] == UM) {
+      Serial.println(" Ligar.");
         digitalWrite(plug4, HIGH);
     } else {
+      Serial.println(" Desligar.");
         digitalWrite(plug4, LOW);
-    }  
+    }
   } else {
     Serial.println("Denied.");
   }  
@@ -347,32 +440,75 @@ void callback(char* topic, byte* payload, unsigned int length) {
   free(p);
 }
 
-/*-------- NTP code ----------*/
+//log
+void logger(String topic, String message){
+  message = timestamp() + message;
+  char buffmsg[80];
+  char bufftpc[20];
+  message.toCharArray(buffmsg,80);
+  topic.toCharArray(bufftpc,20);
+  if(mqtt.connected()){
+    mqtt.publish(bufftpc,buffmsg);
+  }else{
+    Serial.println(message);
+  }
+}
 
+//format time
+char *timestamp(){
+  String timestring = "[";
+  timestring += monthShortStr(month());
+  timestring += " ";
+  if(day() < 10)
+    timestring += "0";
+  timestring += String(day());
+  timestring += " ";
+  timestring += String(year());
+    if(hour() < 10){
+    timestring += "0";
+  }
+  timestring += " ";
+  timestring += String(hour());
+  timestring += ":";
+  if(minute() < 10){
+    timestring += "0";
+  }
+  timestring += String(minute());
+  timestring += ":";
+  if(second() < 10){
+    timestring += "0";
+  }
+  timestring += String(second());
+  timestring += "]";
+  timestring.toCharArray(timebuff,24);
+  return timebuff;
+}
+
+/*-------- NTP code ----------*/
 const int NTP_PACKET_SIZE = 48; // NTP time is in the first 48 bytes of message
 byte packetBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming & outgoing packets
 
 time_t getNtpTime()
 {
-  while (Udp.parsePacket() > 0) ; // discard any previously received packets
-  Serial.println("Transmit NTP Request");
+  while (udp.parsePacket() > 0) ; // discard any previously received packets
+  Serial.println("[NTP DEBUG] Transmit NTP Request");
   sendNTPpacket(timeServer);
   uint32_t beginWait = millis();
   while (millis() - beginWait < 1500) {
-    int size = Udp.parsePacket();
+    int size = udp.parsePacket();
     if (size >= NTP_PACKET_SIZE) {
-      Serial.println("Receive NTP Response");
-      Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
+      Serial.println("[NTP DEBUG] Receive NTP Response");
+      udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
       unsigned long secsSince1900;
       // convert four bytes starting at location 40 to a long integer
       secsSince1900 =  (unsigned long)packetBuffer[40] << 24;
       secsSince1900 |= (unsigned long)packetBuffer[41] << 16;
       secsSince1900 |= (unsigned long)packetBuffer[42] << 8;
       secsSince1900 |= (unsigned long)packetBuffer[43];
-      return secsSince1900 - 2208988800UL + timeZone * SECS_PER_HOUR;
+      return secsSince1900 - 2208988800UL - 3 * SECS_PER_HOUR;
     }
   }
-  Serial.println("No NTP Response :-(");
+  Serial.println("[NTP DEBUG] No NTP Response :-(");
   return 0; // return 0 if unable to get the time
 }
 
@@ -394,31 +530,7 @@ void sendNTPpacket(IPAddress &address)
   packetBuffer[15]  = 52;
   // all NTP fields have been given values, now
   // you can send a packet requesting a timestamp:                 
-  Udp.beginPacket(address, 123); //NTP requests are to port 123
-  Udp.write(packetBuffer, NTP_PACKET_SIZE);
-  Udp.endPacket();
-}
-
-/** Time display code **/
-
-void digitalClockDisplay(){
-  // digital clock display of the time
-  Serial.print(hour());
-  printDigits(minute());
-  printDigits(second());
-  Serial.print(" ");
-  Serial.print(day());
-  Serial.print(" ");
-  Serial.print(month());
-  Serial.print(" ");
-  Serial.print(year()); 
-  Serial.println(); 
-}
-
-void printDigits(int digits){
-  // utility for digital clock display: prints preceding colon and leading 0
-  Serial.print(":");
-  if(digits < 10)
-    Serial.print('0');
-  Serial.print(digits);
+  udp.beginPacket(address, 123); //NTP requests are to port 123
+  udp.write(packetBuffer, NTP_PACKET_SIZE);
+  udp.endPacket();
 }
